@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Smart Recipe Recommender</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Smart Recipe Recommender</h1>
+    </header>
+    <div class="container">
+        <h2>Recommended Recipes</h2>
+        {% if recommended_recipes %}
+            <ul class="recipe-list">
+                {% for recipe in recommended_recipes %}
+                    <li>
+                        <a href="{{ url_for('recipe', recipe_id=recipe.id) }}">
+                            <img src="{{ url_for('static', filename='images/placeholder.jpg') }}" alt="Recipe Image">
+                            <h3>{{ recipe.name }}</h3>
+                            <p>{{ recipe.description }}</p>
+                        </a>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No recipes available. Please check back later.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
