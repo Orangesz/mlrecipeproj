@@ -5,6 +5,7 @@ from pprint import pprint
 import html
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urljoin
 
 #TO TURN INTO USER INPUT PARAMETERS:
 
@@ -55,16 +56,18 @@ def scrape_recipe_website(url):
 
     if "@graph" in jason:
         jason = jason["@graph"][0]
-
-    aggrJason = jason["aggregateRating"]
-    if "ratingValue" not in aggrJason or ("ratingCount" not in aggrJason and "reviewCount" not in aggrJason):
-        print("Recipe does not have valid rating data.")
-        return {}
-    
-    rating_value = aggrJason["ratingValue"]
-    rating_count = aggrJason.get("ratingCount", aggrJason.get("reviewCount", "0"))
-    if not is_valid_rating(rating_value, rating_count):
-        print("Recipe: " + jason["name"] + " does not meet rating criteria.")
+    try:
+        aggrJason = jason["aggregateRating"]
+        if "ratingValue" not in aggrJason or ("ratingCount" not in aggrJason and "reviewCount" not in aggrJason):
+            #print("Recipe does not have valid rating data.")
+            return {}
+        
+        rating_value = aggrJason["ratingValue"]
+        rating_count = aggrJason.get("ratingCount", aggrJason.get("reviewCount", "0"))
+        if not is_valid_rating(rating_value, rating_count):
+            #print("Recipe: " + jason["name"] + " does not meet rating criteria.")
+            return {}
+    except Exception as e:
         return {}
     
     # Process the JSON data to extract recipe information
@@ -93,45 +96,87 @@ def scrape_recipe_website(url):
 
     return recipe
 
-def scrape_recipe_links(url):
-    response = requests.get(url)
-    if response.status_code != 200:
-        print(f"Failed to retrieve the webpage. Status code: {response.status_code}")
-        return []
-
-    soup = BeautifulSoup(response.content, 'html.parser')
+def scrape_recipe_links(primary_navigation_url):
     recipe_links = []
 
-    # Find all the div elements with class "recipe-card" and extract the links
-    recipe_cards = soup.find_all('div', class_='recipe-card')
-    for card in recipe_cards:
-        link = card.find('a')['href']
-        # Check if the link is a full URL or a relative URL and construct the complete URL accordingly
-        if not link.startswith('http'):
-            link = url.rstrip('/') + '/' + link.lstrip('/')
-        recipe_links.append(link)
+    def scrape_page(url):
+        response = requests.get(url)
+        if response.status_code != 200:
+            print(f"Failed to retrieve the webpage. Status code: {response.status_code}")
+            return []
 
-    if recipe_links:
-        return recipe_links
+        soup = BeautifulSoup(response.content, 'html.parser')
+        temp_recipe_links = []
+        # Find all the div elements with class "recipe-card" and extract the links
+        recipe_cards = soup.find_all('div', class_='recipe-card')
+        for card in recipe_cards:
+            link = card.find('a')['href']
+            # Check if the link is a full URL or a relative URL and construct the complete URL accordingly
+            if not link.startswith('http'):
+                link = url.rstrip('/') + '/' + link.lstrip('/')
+            temp_recipe_links.append(link)
+
+        if temp_recipe_links:
+            next_button = soup.find('li', class_='pagination-next')
+            if next_button:
+                next_page_url = next_button.find('a', rel='next')['href']
+                next_page_url = urljoin(url, next_page_url)
+            elif soup.find('li', class_ = 'item next page-right-xs m-right-xs'):
+                next_button = soup.find('li', class_ = 'item next page-right-xs m-right-xs')
+                next_page_url = next_button.find('a')['href']
+                next_page_url = urljoin(url, next_page_url)
+                print(next_page_url)
+            else:
+                next_page_url = None
+            return temp_recipe_links, next_page_url
+        
+        #if recipe urls are stored in javascript json tag, continue
+        soup = BeautifulSoup(response.text, 'html.parser')
+        res = soup.find(type="application/ld+json")
+        json_object = json.loads(res.contents[0])
+        if type(json_object) == list:
+            jason = json_object[0]
+        else:
+            jason = json_object
+
+        if "@graph" in jason:
+            jason = jason["@graph"][0]
+
+        for item in jason['itemListElement']:
+            link = item['url']
+            if not link.startswith('http'):
+                link = url.rstrip('/') + '/' + link.lstrip('/')
+            temp_recipe_links.append(link)
+
+        next_button = soup.find('li', class_='pagination-next')
+        if next_button:
+            next_page_url = next_button.find('a', rel='next')['href']
+            next_page_url = urljoin(url, next_page_url)
+        elif soup.find('li', class_ = 'item next page-right-xs m-right-xs'):
+            next_button = soup.find('li', class_ = 'item next page-right-xs m-right-xs')
+            next_page_url = next_button.find('a')['href']
+            next_page_url = urljoin(url, next_page_url)
+            print(next_page_url)
+        else:
+            print("None! :(")
+            next_page_url = None
+        return temp_recipe_links, next_page_url
     
-    #if recipe urls are stored in javascript json tag, continue
-    soup = BeautifulSoup(response.text, 'html.parser')
-    res = soup.find(type="application/ld+json")
-    json_object = json.loads(res.contents[0])
-    if type(json_object) == list:
-        jason = json_object[0]
-    else:
-        jason = json_object
+    i = 0
+    next_page_url = primary_navigation_url
 
-    if "@graph" in jason:
-        jason = jason["@graph"][0]
-
-    for item in jason['itemListElement']:
-        link = item['url']
-        if not link.startswith('http'):
-            link = url.rstrip('/') + '/' + link.lstrip('/')
-        recipe_links.append(link)
-
+    with ThreadPoolExecutor() as executor:
+        while next_page_url and i < 5:
+            future_to_url = {executor.submit(scrape_page, next_page_url): next_page_url}
+            for future in as_completed(future_to_url):
+                try:
+                    i = i+1
+                    links, next_page_url = future.result()
+                    recipe_links.extend(links)
+                except Exception as e:
+                    i = 20
+                    print(f"Error scraping {future_to_url[future]}: {e}")
+    pprint(recipe_links)
     return recipe_links
 
 def write_to_file(recipes, output_file):
@@ -150,18 +195,29 @@ def write_to_file(recipes, output_file):
         
 if __name__ == "__main__":
 
-    website_urls = ["https://www.cuisineaz.com/categories/plats-cat48816",
-                    "https://www.marmiton.org/recettes/top-internautes.aspx"]
+    website_urls = [#"https://www.cuisineaz.com/categories/plats-cat48816",
+                    #"https://www.marmiton.org/recettes/top-internautes-entree.aspx",
+                    #"https://www.marmiton.org/recettes/top-internautes-plat-principal.aspx",
+                    #"https://www.marmiton.org/recettes/top-internautes-dessert.aspx",
+                    "https://www.cuisineactuelle.fr/recettes-de-cuisine/recette-par-plat"
+                    ]
 
     links = []
     with ThreadPoolExecutor() as executor:
         # Use ThreadPoolExecutor to scrape recipe links concurrently
+        """ futures = []
+        for url in website_urls:
+            futures.append(executor.submit(scrape_recipe_links, url))
+        for future in as_completed(futures):
+            print(future.result()) """
         future_to_url = {executor.submit(scrape_recipe_links, url): url for url in website_urls}
         for future in as_completed(future_to_url):
             try:
                 links.extend(future.result())
             except Exception as e:
                 print(f"Error scraping {future_to_url[future]}: {e}")
+
+
     """ with ThreadPoolExecutor() as executor:
         # Use ThreadPoolExecutor to scrape recipe links concurrently
         future_to_url = {executor.submit(scrape_recipe_links, website_url): website_url}
