@@ -53,7 +53,8 @@ def scrape_recipe_website(url):
                     'cookTime': cookTime, 
                     'recipeCategory': recipeCategory, 
                     'ingredients': ingredients, 
-                    'instructions': instructions}
+                    'instructions': instructions,
+                    'source' : url}
 
     return recipe
 
@@ -95,6 +96,7 @@ if __name__ == "__main__":
             print("Instructions:")
             for step in recipe['instructions']:
                 print(prettify(step))
+            print("\nRecipe courtesy of: " + recipe['source'])
             print("\n")
     else:
         print("No recipes found.")
